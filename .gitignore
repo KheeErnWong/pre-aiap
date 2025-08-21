@@ -19,3 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# data files
+.csv
+data/
