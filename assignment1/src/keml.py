@@ -1,6 +1,8 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy import stats
+import numpy as np
 
 def data_overview(df):
     """Display a comprehensive overview of the DataFrame"""
@@ -228,8 +230,7 @@ def _rename_duplicate_columns(df, suffix):
 def _remove_duplicate_columns(df, keep):
     """Helper function to remove duplicate columns"""
     original_shape = df.shape
-    print(f"Original shape: {original_shape
-                             }")
+    print(f"Original shape: {original_shape}")
     if keep == 'none':
         # Remove all duplicates (keep no duplicated columns)
         mask_to_keep = ~df.columns.duplicated(keep=False)
@@ -241,7 +242,7 @@ def _remove_duplicate_columns(df, keep):
     
     removed_count = original_shape[1] - mask_to_keep.sum()
     print(f"✅ Removed {removed_count} duplicate columns (kept '{keep}' occurrence)")
-    print(f"Shape after removing duplicates:{result_df.shape}")
+    print(f"Shape after removing duplicates: {result_df.shape}")
     
     return result_df
 
@@ -266,49 +267,282 @@ def analyze_cat_feat(df):
     dict: Dictionary containing value counts for each categorical feature
     """
     # Extract columns of type 'object' (categorical features)
-    cat_columns = df.select_dtypes(include=['object']).columns.tolist()
+    cat_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
     
     if not cat_columns:
         print("No categorical (object) columns found in the dataframe.")
         return {}
     
-    print(f"Found {len(cat_columns)} categorical features: {cat_columns}")
+    print(f"Found {len(cat_columns)} categorical features (sorted by unique values): {cat_columns}")
     
     # Dictionary to store value counts
     value_counts_dict = {}
     
-    # Analyze each categorical feature
+    # PHASE 1: Display all value counts and statistics (in sorted order)
+    print("\n" + "="*80)
+    print("CATEGORICAL FEATURES VALUE COUNTS")
+    print("="*80)
+    
     for col in cat_columns:
         print(f"\n{'='*50}")
-        print(f"Analyzing feature: {col}")
+        print(f"Feature: {col}")
         print(f"{'='*50}")
         
-        # Get value counts
+        # Get value counts and percentages
         value_counts = df[col].value_counts()
-        value_counts_dict[col] = value_counts
+        value_percentages = df[col].value_counts(normalize=True) * 100
         
-        # Display value counts
-        print(f"\nValue counts for '{col}':")
-        print(value_counts)
-        print(f"\nUnique values: {df[col].nunique()}")
+        # Create combined DataFrame with counts and percentages
+        value_analysis = pd.DataFrame({
+            'Count': value_counts,
+            'Percentage': value_percentages.round(2)
+        })
+        
+        value_counts_dict[col] = value_analysis
+        
+        # Display statistics
+        print(f"Unique values: {df[col].nunique()}")
         print(f"Missing values: {df[col].isnull().sum()}")
         
-        # Create count plot
-        plt.figure(figsize=(10, 6))
+        # Display value counts with percentages
+        if df[col].nunique() > 15:
+            print("(Showing top 15 categories)")
+            print(value_analysis.head(15))
+        else:
+            print(value_analysis)
+    
+    # PHASE 2: Create visualizations in rows of 3 (in sorted order)
+    print(f"\n{'='*80}")
+    print("Categorical Features Distribution")
+    print("="*80)
+    
+    # Set up the color palette
+    sns.set_palette("husl")
+    
+    # Calculate number of rows needed
+    n_features = len(cat_columns)
+    n_cols = 2
+    n_rows = (n_features + n_cols - 1) // n_cols  # Ceiling division
+    
+    # Create subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 9*n_rows))
+    
+    # Flatten axes array for easier indexing
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+    
+    axes = axes.flatten()
+    
+    # Create plots in sorted order
+    for idx, col in enumerate(cat_columns):
+        ax = axes[idx]
+
+        # Get value counts for ordering
+        value_counts = df[col].value_counts()
         
         # Handle cases with many unique values
-        if df[col].nunique() > 20:
-            # Show only top 20 categories
-            top_categories = value_counts.head(20)
-            plt.figure(figsize=(12, 8))
-            sns.countplot(data=df[df[col].isin(top_categories.index)], x=col)
-            plt.title(f'Count Plot for {col} (Top 20 categories)')
+        if df[col].nunique() > 15:
+            # Show only top 15 categories
+            top_categories = df[col].value_counts().head(15)
+            plot_data = df[df[col].isin(top_categories.index)]
+            order = top_categories.index.tolist()
+            title = f'{col}\n(Top 15 categories)\nUnique values: {df[col].nunique()}'
         else:
-            sns.countplot(data=df, x=col)
-            plt.title(f'Count Plot for {col}')
+            plot_data = df
+            order = value_counts.index.tolist()
+            title = f'{col}\nUnique values: {df[col].nunique()}'
         
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.show()
+        # Create count plot 
+        sns.countplot(data=plot_data, x=col, hue=col, ax=ax, palette="husl", legend=False, order=order)
+        ax.set_title(title, fontsize=12, pad=10)
+        ax.set_xlabel('')
+        
+        # Rotate x-axis labels to 90 degrees
+        ax.tick_params(axis='x', rotation=90)
+        
+        # Add value labels on bars (optional)
+        for container in ax.containers:
+            ax.bar_label(container, fontsize=8, rotation=90, padding=3)
+    
+    # Hide empty subplots
+    for idx in range(len(cat_columns), len(axes)):
+        axes[idx].set_visible(False)
+    
+    plt.tight_layout()
+    plt.show()
     
     return value_counts_dict
+
+
+def analyze_num_feat(df):
+    """
+    Analyze numerical features (int64 columns) in a DataFrame.
+    
+    Parameters:
+    df (pd.DataFrame): Input DataFrame
+    
+    Returns:
+    dict: Dictionary containing analysis results
+    """
+    # Extract int64 columns
+    numeric_cols = df.select_dtypes(include=['int64']).columns.tolist()
+    
+    if not numeric_cols:
+        print("No int64 columns found in the DataFrame.")
+        return None
+    
+    print(f"Found {len(numeric_cols)} numerical columns: {numeric_cols}\n")
+    
+    # Store results
+    results = {}
+    
+    # 1. Descriptive Statistics
+    print("="*60)
+    print("DESCRIPTIVE STATISTICS")
+    print("="*60)
+    desc_stats = df[numeric_cols].describe()
+    print(desc_stats)
+    results['descriptive_stats'] = desc_stats
+    
+    # Additional statistics
+    print("\n" + "="*60)
+    print("ADDITIONAL STATISTICS")
+    print("="*60)
+    additional_stats = pd.DataFrame()
+    for col in numeric_cols:
+        additional_stats[col] = [
+            df[col].skew(),
+            df[col].kurtosis(),
+            df[col].var(),
+        ]
+    additional_stats.index = ['Skewness', 'Kurtosis', 'Variance']
+    print(additional_stats)
+    results['additional_stats'] = additional_stats
+    
+    # 2. Distribution Analysis with Histograms
+    n_cols = len(numeric_cols)
+    n_rows = (n_cols + 2) // 3  # 3 plots per row
+    
+    plt.figure(figsize=(15, 5 * n_rows))
+    plt.suptitle('Distribution of Numerical Features', fontsize=16, y=0.98)
+    
+    for i, col in enumerate(numeric_cols, 1):
+        plt.subplot(n_rows, 3, i)
+        
+        # Histogram with KDE
+        plt.hist(df[col], bins=30, alpha=0.7, color='skyblue', edgecolor='black', density=True)
+        
+        # Add KDE curve
+        try:
+            sns.kdeplot(data=df[col], color='red', linewidth=2)
+        except:
+            pass
+        
+        plt.title(f'{col}\n(Mean: {df[col].mean():.2f}, Std: {df[col].std():.2f})')
+        plt.xlabel(col)
+        plt.ylabel('Density')
+        plt.grid(True, alpha=0.3)
+        
+        # Add statistics text
+        plt.text(0.02, 0.98, f'Skew: {df[col].skew():.2f}\nKurt: {df[col].kurtosis():.2f}', 
+                transform=plt.gca().transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # 3. Outlier Detection with Box Plots
+    plt.figure(figsize=(15, 5 * n_rows))
+    plt.suptitle('Outlier Detection - Box Plots', fontsize=16, y=0.98)
+    
+    outlier_summary = {}
+    
+    for i, col in enumerate(numeric_cols, 1):
+        plt.subplot(n_rows, 3, i)
+        
+        # Box plot
+        box_plot = plt.boxplot(df[col], patch_artist=True)
+        box_plot['boxes'][0].set_facecolor('lightblue')
+        
+        plt.title(f'{col}')
+        plt.ylabel('Values')
+        plt.grid(True, alpha=0.3)
+        
+        # Calculate outliers using IQR method
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        
+        outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)][col]
+        outlier_count = len(outliers)
+        outlier_percentage = (outlier_count / len(df)) * 100
+        
+        outlier_summary[col] = {
+            'count': outlier_count,
+            'percentage': outlier_percentage,
+            'lower_bound': lower_bound,
+            'upper_bound': upper_bound
+        }
+        
+        # Add outlier information
+        plt.text(0.02, 0.98, f'Outliers: {outlier_count} ({outlier_percentage:.1f}%)', 
+                transform=plt.gca().transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # 4. Outlier Summary
+    print("\n" + "="*60)
+    print("OUTLIER SUMMARY (IQR Method)")
+    print("="*60)
+    outlier_df = pd.DataFrame(outlier_summary).T
+    print(outlier_df.round(2))
+    results['outlier_summary'] = outlier_df
+    
+    # 5. Correlation Matrix
+    if len(numeric_cols) > 1:
+        print("\n" + "="*60)
+        print("CORRELATION MATRIX")
+        print("="*60)
+        corr_matrix = df[numeric_cols].corr()
+        print(corr_matrix.round(3))
+        
+        # Correlation heatmap
+        plt.figure(figsize=(12, 10))
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, 
+                   mask=mask, square=True, fmt='.2f')
+        plt.title('Correlation Matrix of Numerical Features')
+        plt.tight_layout()
+        plt.show()
+        
+        results['correlation_matrix'] = corr_matrix
+    
+    # 6. Zero and Constant Value Analysis
+    print("\n" + "="*60)
+    print("ZERO AND CONSTANT VALUE ANALYSIS")
+    print("="*60)
+    zero_constant_analysis = {}
+    for col in numeric_cols:
+        zero_count = (df[col] == 0).sum()
+        zero_percentage = (zero_count / len(df)) * 100
+        unique_values = df[col].nunique()
+        is_constant = unique_values == 1
+        
+        zero_constant_analysis[col] = {
+            'zero_count': zero_count,
+            'zero_percentage': zero_percentage,
+            'unique_values': unique_values,
+            'is_constant': is_constant
+        }
+    
+    zero_constant_df = pd.DataFrame(zero_constant_analysis).T
+    print(zero_constant_df.round(2))
+    results['zero_constant_analysis'] = zero_constant_df
+    
+    return results
